@@ -1,5 +1,6 @@
 //! Persistent settings stored as JSON under %LOCALAPPDATA%\BtBatteryBar.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -58,6 +59,10 @@ pub struct Settings {
     /// 条内文字/间距的缩放百分比（相对 96 DPI 设计值），默认 100。
     /// 用户抱怨过 150% 缩放下字太大，因此给出 80/100/120/140 四档（菜单"字号"）。
     pub text_pct: u32,
+    /// 地址（小写）→ 用户自定义显示名（别名）。与 known_devices 分开存：
+    /// known_devices 有 40 台淘汰逻辑，用户手动改的名字不能跟着被淘汰。
+    /// 旧 settings.json 缺此字段时由 #[serde(default)] 落到空表。
+    pub custom_names: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -76,6 +81,7 @@ impl Default for Settings {
             known_devices: Vec::new(),
             strip_side: "right".into(),
             text_pct: DEFAULT_TEXT_PCT,
+            custom_names: HashMap::new(),
         }
     }
 }
@@ -147,6 +153,37 @@ impl Settings {
         if !shown {
             self.hidden_addresses.push(addr);
         }
+    }
+
+    /// 查询设备的自定义显示名（地址大小写不敏感，键存为小写）。
+    pub fn custom_name(&self, address: &str) -> Option<&str> {
+        if self.custom_names.is_empty() {
+            return None;
+        }
+        self.custom_names
+            .get(&address.to_lowercase())
+            .map(|s| s.as_str())
+    }
+
+    /// 设置自定义显示名。trim 后：空串 = 删除别名；与系统原名相同 = 删除别名
+    /// （原名查 known_devices，查不到则不比较）。返回是否发生变更（变更才写盘）。
+    pub fn set_custom_name(&mut self, address: &str, alias: &str) -> bool {
+        let key = address.to_lowercase();
+        let alias = alias.trim();
+        let original = self
+            .known_devices
+            .iter()
+            .find(|k| k.address.eq_ignore_ascii_case(address))
+            .map(|k| k.name.clone());
+        if alias.is_empty() || original.as_deref() == Some(alias) {
+            return self.custom_names.remove(&key).is_some();
+        }
+        let old = self.custom_names.get(&key).cloned();
+        if old.as_deref() == Some(alias) {
+            return false;
+        }
+        self.custom_names.insert(key, alias.to_string());
+        true
     }
 
     /// Update the remembered catalog. Returns true if the file should be saved.
@@ -415,5 +452,48 @@ mod tests {
             c
         };
         assert!(!normalized.topmost);
+    }
+
+    #[test]
+    fn custom_name_set_get_remove_case_insensitive() {
+        let mut s = Settings::default();
+        assert_eq!(s.custom_name("AA:BB:CC:DD:EE:FF"), None);
+        // 地址大小写不敏感（内部键存小写）
+        assert!(s.set_custom_name("AA:BB:CC:DD:EE:FF", "耳机"));
+        assert_eq!(s.custom_name("aa:bb:cc:dd:ee:ff"), Some("耳机"));
+        // 同名再设一次 → 无变更
+        assert!(!s.set_custom_name("aa:bb:cc:dd:ee:ff", "耳机"));
+        // 空串 = 删除别名
+        assert!(s.set_custom_name("AA:BB:CC:DD:EE:FF", ""));
+        assert!(s.custom_names.is_empty());
+    }
+
+    #[test]
+    fn custom_name_trims_whitespace() {
+        let mut s = Settings::default();
+        assert!(s.set_custom_name("hid:m", "  鼠标  "));
+        assert_eq!(s.custom_name("hid:m"), Some("鼠标"));
+        // trim 后为空 = 删除
+        assert!(s.set_custom_name("hid:m", "   "));
+        assert_eq!(s.custom_name("hid:m"), None);
+    }
+
+    #[test]
+    fn custom_name_equal_to_original_removes_alias() {
+        let mut s = Settings::default();
+        s.known_devices.push(KnownDevice {
+            address: "hid:m".into(),
+            name: "MX Mouse".into(),
+            kind: "Mouse".into(),
+        });
+        // 已有别名 → 改回原名 = 删除别名（算变更）
+        assert!(s.set_custom_name("hid:m", "临时"));
+        assert!(s.set_custom_name("hid:m", "MX Mouse"));
+        assert_eq!(s.custom_name("hid:m"), None);
+        // 本就没有别名时输入原名 → 无变更
+        assert!(!s.set_custom_name("hid:m", "MX Mouse"));
+        // 原名未知（不在 known_devices）→ 不比较，正常保存
+        assert!(s.set_custom_name("hid:unknown", "MX Mouse"));
+        assert_eq!(s.custom_name("hid:unknown"), Some("MX Mouse"));
     }
 }
