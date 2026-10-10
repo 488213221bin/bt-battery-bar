@@ -128,6 +128,8 @@ const MID_FONT_M: usize = 1021;
 const MID_FONT_L: usize = 1022;
 const MID_FONT_XL: usize = 1023;
 const MID_DEV_BASE: usize = 3100;
+/// 「重命名设备」子菜单条目 id 基址（避开 MID_DEV_BASE..+MAX_MENU_DEVICES=3116）。
+const MID_RENAME_BASE: usize = 3300;
 
 /// 字号档位：菜单 id -> 百分比。
 const FONT_PRESETS: [(usize, u32); 4] = [
@@ -203,6 +205,9 @@ pub struct App {
     fs_hidden: AtomicBool,
     demo_mode: AtomicBool,
     pub settings_addrs: Mutex<Vec<String>>,
+    /// 「重命名设备」子菜单条目：(地址, 系统原名)。与 settings_addrs 同理：
+    /// 菜单是同步 TrackPopupMenu，返回后 on_command 立即消费。
+    rename_items: Mutex<Vec<(String, String)>>,
     panel_hwnd: AtomicI64,
     overflow_x: Mutex<(i32, i32)>, // client-coord [left, right) of the "+n" pill
     layout: Mutex<StripLayout>,
@@ -306,6 +311,7 @@ impl App {
             fs_hidden: AtomicBool::new(false),
             demo_mode: AtomicBool::new(false),
             settings_addrs: Mutex::new(Vec::new()),
+            rename_items: Mutex::new(Vec::new()),
             panel_hwnd: AtomicI64::new(0),
             overflow_x: Mutex::new((0, 0)),
             layout: Mutex::new(StripLayout::default()),
@@ -899,6 +905,37 @@ impl App {
                 }
             }
             *self.settings_addrs.lock().unwrap() = addrs;
+            let _ = AppendMenuW(m_dev, MF_SEPARATOR, 0, PCWSTR::null());
+            // 「重命名设备」子菜单：条目显示当前生效名（有别名 → 别名（原名）），
+            // 行数据（地址 + 系统原名）存入 rename_items 供 on_command 使用。
+            let Ok(m_rename) = CreatePopupMenu() else { return };
+            let mut rename_items: Vec<(String, String)> = Vec::new();
+            if rows.is_empty() {
+                append_flags(
+                    m_rename,
+                    MENU_ITEM_FLAGS(MF_STRING.0 | MF_GRAYED.0),
+                    0,
+                    "暂无设备",
+                    &mut keep,
+                );
+            } else {
+                for (i, row) in rows.iter().take(MAX_MENU_DEVICES).enumerate() {
+                    let label = match cfg.custom_name(&row.address) {
+                        Some(alias) => format!("{}（{}）", alias, row.name),
+                        None => row.name.clone(),
+                    };
+                    append_flags(
+                        m_rename,
+                        MENU_ITEM_FLAGS(MF_STRING.0),
+                        MID_RENAME_BASE + i,
+                        &label,
+                        &mut keep,
+                    );
+                    rename_items.push((row.address.clone(), row.name.clone()));
+                }
+            }
+            *self.rename_items.lock().unwrap() = rename_items;
+            append_popup(m_dev, m_rename, w!("重命名设备"));
             let _ = AppendMenuW(m_dev, MF_SEPARATOR, 0, PCWSTR::null());
             append_item(m_dev, MID_BT_ADD, w!("添加 / 连接蓝牙设备"), false);
             append_item(m_dev, MID_BT_DEVICES, w!("已连接的设备"), false);
