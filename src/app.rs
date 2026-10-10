@@ -1123,6 +1123,48 @@ impl App {
                 }
                 self.mark_dirty();
             }
+            id if (MID_RENAME_BASE..MID_RENAME_BASE + MAX_MENU_DEVICES).contains(&id) => {
+                let idx = id - MID_RENAME_BASE;
+                let item = self.rename_items.lock().unwrap().get(idx).cloned();
+                let Some((addr, original)) = item else {
+                    return;
+                };
+                // 读取必须在弹窗前完成并释放锁：对话框跑嵌套消息循环，期间
+                // 定时器会经 paint / process_dirty 再次锁 settings，
+                // std Mutex 不可重入 —— 持锁弹窗必死锁。
+                let current = self
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .custom_name(&addr)
+                    .map(|s| s.to_string());
+                let owner = GetAncestor(self.hwnd(), GA_ROOT);
+                let dpi = unsafe { GetDpiForWindow(owner) };
+                let alias = match crate::rename::prompt(
+                    owner,
+                    dpi as i32,
+                    &original,
+                    current.as_deref(),
+                ) {
+                    crate::rename::RenameResult::Cancelled => return,
+                    crate::rename::RenameResult::Set(name) => name,
+                    crate::rename::RenameResult::Reset => String::new(),
+                };
+                let changed = {
+                    let mut cfg = self.settings.lock().unwrap();
+                    let changed = cfg.set_custom_name(&addr, &alias);
+                    if changed {
+                        cfg.save();
+                    }
+                    changed
+                };
+                if changed {
+                    // 与改字号（MID_FONT_*）同一刷新路径：立即重算条宽，
+                    // 下一 dirty tick 重绘条与溢出面板。
+                    self.mark_dirty();
+                    self.layout_and_resize();
+                }
+            }
             _ => {}
         }
     }
