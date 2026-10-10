@@ -186,6 +186,19 @@ impl Settings {
         true
     }
 
+    /// 把自定义名套用到显示列表（**条与溢出面板的唯一收口点**）。
+    /// 菜单、托盘悬停、低电量提醒不走这里，继续显示系统原名。
+    pub fn apply_display_names(&self, devs: &mut [Device]) {
+        if self.custom_names.is_empty() {
+            return;
+        }
+        for d in devs.iter_mut() {
+            if let Some(a) = self.custom_name(&d.address) {
+                d.name = a.to_string();
+            }
+        }
+    }
+
     /// Update the remembered catalog. Returns true if the file should be saved.
     pub fn remember(&mut self, devices: &[Device]) -> bool {
         let mut changed = false;
@@ -495,5 +508,70 @@ mod tests {
         // 原名未知（不在 known_devices）→ 不比较，正常保存
         assert!(s.set_custom_name("hid:unknown", "MX Mouse"));
         assert_eq!(s.custom_name("hid:unknown"), Some("MX Mouse"));
+    }
+
+    #[test]
+    fn apply_display_names_only_rewrites_aliased_devices() {
+        let mut s = Settings::default();
+        let mut devs = vec![
+            dev("EDIFIER W820NB", "bt:h", false, None),
+            dev("MX Mouse", "hid:m", true, Some(80)),
+        ];
+        s.set_custom_name("bt:h", "耳机");
+        s.apply_display_names(&mut devs);
+        assert_eq!(devs[0].name, "耳机");
+        // 没有别名的设备原样保留
+        assert_eq!(devs[1].name, "MX Mouse");
+    }
+
+    #[test]
+    fn apply_display_names_noop_when_empty() {
+        let s = Settings::default();
+        let mut devs = vec![dev("Mouse", "hid:m", true, None)];
+        s.apply_display_names(&mut devs);
+        assert_eq!(devs[0].name, "Mouse");
+    }
+
+    /// 关键回归：两台不同设备改成同一个别名后仍是两行 ——
+    /// 去重（dedup_by_name）按真实名在数据管线分组，别名只在显示层套用。
+    #[test]
+    fn same_alias_does_not_merge_devices() {
+        use crate::model::dedup_by_name;
+        let mut s = Settings::default();
+        let mut devs = vec![
+            dev("MouseA", "hid:a", true, Some(50)),
+            dev("MouseB", "hid:b", true, Some(60)),
+        ];
+        devs = dedup_by_name(devs);
+        assert_eq!(devs.len(), 2);
+        s.set_custom_name("hid:a", "鼠标");
+        s.set_custom_name("hid:b", "鼠标");
+        s.apply_display_names(&mut devs);
+        assert_eq!(devs.len(), 2);
+        assert!(devs.iter().all(|d| d.name == "鼠标"));
+    }
+
+    /// 菜单行（显示/隐藏列表、重命名子菜单的行数据）必须保持系统原名。
+    #[test]
+    fn menu_rows_keep_original_name_despite_alias() {
+        let mut s = Settings::default();
+        let live = [dev("EDIFIER W820NB", "bt:h", true, Some(55))];
+        s.set_custom_name("bt:h", "耳机");
+        let rows = s.rows_for_settings(&live);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "EDIFIER W820NB");
+        assert_eq!(rows[0].label(), "EDIFIER W820NB    55%  已连接");
+    }
+
+    #[test]
+    fn custom_names_serde_roundtrip_and_legacy_json() {
+        let mut s = Settings::default();
+        s.set_custom_name("bt:h", "耳机");
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.custom_name("BT:H"), Some("耳机"));
+        // 旧 settings.json 缺 custom_names 字段 → 默认空表
+        let legacy: Settings = serde_json::from_str(r#"{"poll_seconds":30}"#).unwrap();
+        assert!(legacy.custom_names.is_empty());
     }
 }
