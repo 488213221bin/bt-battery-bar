@@ -476,6 +476,9 @@ mod tests {
         assert_eq!(s.custom_name("aa:bb:cc:dd:ee:ff"), Some("耳机"));
         // 同名再设一次 → 无变更
         assert!(!s.set_custom_name("aa:bb:cc:dd:ee:ff", "耳机"));
+        // 别名 A → 别名 B 的改写：返回变更，查询命中新值
+        assert!(s.set_custom_name("AA:BB:CC:DD:EE:FF", "音响"));
+        assert_eq!(s.custom_name("aa:bb:cc:dd:ee:ff"), Some("音响"));
         // 空串 = 删除别名
         assert!(s.set_custom_name("AA:BB:CC:DD:EE:FF", ""));
         assert!(s.custom_names.is_empty());

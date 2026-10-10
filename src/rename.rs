@@ -107,8 +107,8 @@ fn set_font(child: HWND, font: HGDIOBJ) {
     }
 }
 
-/// 创建五个子控件并预填、禁用状态、排版一次。
-unsafe fn create_children(hwnd: HWND, st: &mut State) {
+/// 创建五个子控件并预填、禁用状态、排版一次。任一子控件创建失败返回 false。
+unsafe fn create_children(hwnd: HWND, st: &mut State) -> bool {
     let font = GetStockObject(DEFAULT_GUI_FONT);
     let hinst = HINSTANCE(GetModuleHandleW(PCWSTR::null()).unwrap().0);
     let label: Vec<u16> = format!("原名：{}", ellipsis(&st.original, MAX_ORIG_CHARS))
@@ -196,6 +196,15 @@ unsafe fn create_children(hwnd: HWND, st: &mut State) {
     )
     .unwrap_or_default();
 
+    if st.label_hwnd.0.is_null()
+        || st.edit.0.is_null()
+        || st.ok_btn.0.is_null()
+        || st.cancel_btn.0.is_null()
+        || st.reset_btn.0.is_null()
+    {
+        return false;
+    }
+
     for child in [st.label_hwnd, st.edit, st.ok_btn, st.cancel_btn, st.reset_btn] {
         if !child.0.is_null() {
             set_font(child, font);
@@ -211,6 +220,7 @@ unsafe fn create_children(hwnd: HWND, st: &mut State) {
     }
 
     layout_children(hwnd);
+    true
 }
 
 /// 按当前客户区尺寸与 DPI 排布子控件（WM_CREATE / WM_SIZE 调用）。
@@ -264,7 +274,10 @@ unsafe extern "system" fn dlg_proc(
             if st.is_null() {
                 return LRESULT(-1); // 中止窗口创建
             }
-            create_children(hwnd, &mut *st);
+            if !create_children(hwnd, &mut *st) {
+                // 子控件创建失败：中止窗口创建，prompt 返回 Cancelled。
+                return LRESULT(-1);
+            }
             LRESULT(0)
         }
         WM_ERASEBKGND => {
@@ -312,8 +325,9 @@ unsafe extern "system" fn dlg_proc(
             LRESULT(0)
         }
         // IsDialogMessage 问默认按钮：应答 LOWORD=IDOK, HIWORD=DC_HASDEFID。
-        // windows-rs 元数据 DM_GETDEFID=0x0400，传统头文件为 0x0402，两者都答，
-        // Enter 在任一定义下都能触发「确定」。
+        // winuser.h: DM_GETDEFID = WM_USER+0 = 0x0400（与 windows-rs 元数据一致）。
+        // 0x0402 在 winuser.h 里是 DM_REPOSITION、本窗口不会收到；作为历史定义
+        // 差异防御性地一并应答（无副作用），确保 Enter 在任一定义下触发「确定」。
         m if m == DM_GETDEFID || m == 0x0402 => {
             LRESULT(((DC_HASDEFID << 16) | IDOK.0 as u32) as isize)
         }
