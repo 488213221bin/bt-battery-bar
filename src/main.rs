@@ -20,6 +20,7 @@ mod hidpp;
 mod hidwatch;
 mod icon;
 mod model;
+mod rename;
 mod settings;
 mod theme;
 

@@ -1138,7 +1138,7 @@ impl App {
                     .unwrap()
                     .custom_name(&addr)
                     .map(|s| s.to_string());
-                let owner = GetAncestor(self.hwnd(), GA_ROOT);
+                let owner = unsafe { GetAncestor(self.hwnd(), GA_ROOT) };
                 let dpi = unsafe { GetDpiForWindow(owner) };
                 let alias = match crate::rename::prompt(
                     owner,
