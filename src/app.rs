@@ -1451,7 +1451,13 @@ impl App {
         unsafe {
             let m = self.metrics();
             let dc = GetDC(HWND::default());
-            let all = self.visible_devices();
+            let mut all = self.visible_devices();
+            // 别名只在显示层生效：条与溢出面板用别名；菜单/托盘提示/低电量
+            // 提醒读原始快照，保持系统原名（spec §4）。
+            {
+                let cfg = self.settings.lock().unwrap();
+                cfg.apply_display_names(&mut all);
+            }
             // 工作区读失败时 max_strip_width() 会是 0，.min(0) 会做出 0 像素宽的窗口；
             // 至少留一个最小条宽。
             let max_w = max_strip_width().max(m.st(MIN_STRIP_WIDTH));
@@ -1692,7 +1698,11 @@ impl App {
     /// Full list shown in the popup panel: everything that passes the
     /// show/hide + offline filter, including devices cut from the strip.
     fn panel_devices(&self) -> Vec<Device> {
-        self.visible_devices()
+        let mut devs = self.visible_devices();
+        // 与 compute_layout 同一收口：溢出面板也显示别名。
+        let cfg = self.settings.lock().unwrap();
+        cfg.apply_display_names(&mut devs);
+        devs
     }
 
     fn toggle_panel(&self) {
