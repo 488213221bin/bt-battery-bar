@@ -1,0 +1,44 @@
+name: build-portable
+
+# 手动触发 + 推送到 main 时自动跑
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # edition 2024 需要 Rust 1.85+，stable 远高于此
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      # .cargo/config.toml 已固定 x86_64-pc-windows-msvc + crt-static，
+      # 这里不加 --locked：Cargo.lock 若落后于 Cargo.toml，--locked 会直接失败
+      - name: Build
+        run: cargo build --release
+
+      # 与官方 RELEASE.md 的硬校验一致：必须是 GUI 子系统，
+      # 否则双击会弹出终端黑框
+      - name: Verify PE subsystem
+        shell: pwsh
+        run: |
+          $exe = "target\release\bt-battery-bar.exe"
+          $b   = [IO.File]::ReadAllBytes($exe)
+          $pe  = [BitConverter]::ToInt32($b, 0x3C)
+          $sub = [BitConverter]::ToUInt16($b, $pe + 24 + 0x44)
+          Write-Host "Subsystem = $sub  (2 = WINDOWS_GUI)"
+          if ($sub -ne 2) { throw "PE subsystem 不是 GUI，产物不可用" }
+          Write-Host ("Size = {0:N0} bytes" -f (Get-Item $exe).Length)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bt-battery-bar-exe
+          path: target/release/bt-battery-bar.exe
+          if-no-files-found: error
