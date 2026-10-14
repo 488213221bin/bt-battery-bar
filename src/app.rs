@@ -1551,8 +1551,6 @@ impl App {
                 let (pw, _) = text_size(dc, &pill_text(&d));
                 let _ = SelectObject(dc, oldp);
                 let item_w = if i == 0 { 0 } else { m.st(DEV_GAP) }
-                    + m.st(DOT)
-                    + m.st(DOT_GAP)
                     + tw
                     + m.st(NAME_PILL_GAP)
                     + pw
@@ -1654,43 +1652,25 @@ impl App {
                 for (i, d) in devices.iter().enumerate() {
                     cx += if i == 0 { 0 } else { m.st(DEV_GAP) };
 
-                    let dcol = if !d.connected {
-                        theme.dot_off
-                    } else if d.battery.map(|b| b <= low_alert).unwrap_or(false) {
-                        theme.dot_low
-                    } else {
-                        theme.dot_ok
-                    };
-                    let dot = m.st(DOT);
-                    draw_status_dot(md, cx, cy, dot, dcol);
-                    cx += dot + m.st(DOT_GAP);
-
                     let old = SelectObject(md, HGDIOBJ(self.name_font().0));
                     let (tw, th) = text_size(md, &d.name);
                     draw_text_halo(md, cx, cy - th / 2, &d.name, theme.fg, theme.fg_outline);
                     let _ = SelectObject(md, old);
                     cx += tw + m.st(NAME_PILL_GAP);
 
-                    let (pcolor, pfg) = match d.battery {
-                        Some(v) if v <= low_alert => (theme.pill_low, rgb(255, 255, 255)),
-                        Some(v) if v <= 50 => (theme.pill_mid, rgb(255, 255, 255)),
-                        Some(_) => (theme.pill_ok, rgb(255, 255, 255)),
-                        None => (theme.pill_off_bg, theme.pill_off_fg),
+                    // 电量数字：只上色、不加底色。颜色沿用原胶囊的色阶
+                    // （绿/橙/红），但仍以文字形式表达，不丢低电量提示。
+                    let pcolor = match d.battery {
+                        Some(v) if v <= low_alert => theme.pill_low,
+                        Some(v) if v <= 50 => theme.pill_mid,
+                        Some(_) => theme.pill_ok,
+                        None => theme.pill_off_fg,
                     };
-                    let ptext = pill_text(&d);
+                    let ptext = bar_battery_text(&d);
                     let old2 = SelectObject(md, HGDIOBJ(self.pill_font().0));
                     let (pw, ph) = text_size(md, &ptext);
                     let pad = m.st(PILL_PAD);
-                    let pbr = CreateSolidBrush(COLORREF(pcolor));
-                    let prect = RECT {
-                        left: cx,
-                        top: cy - ph / 2 - m.st(2),
-                        right: cx + pw + pad * 2,
-                        bottom: cy + ph / 2 + m.st(2),
-                    };
-                    let _ = FillRect(md, &prect, pbr);
-                    let _ = DeleteObject(HGDIOBJ(pbr.0));
-                    draw_text_halo(md, cx + pad, cy - ph / 2, &ptext, pfg, theme.fg_outline);
+                    draw_text_halo(md, cx + pad, cy - ph / 2, &ptext, pcolor, theme.fg_outline);
                     let _ = SelectObject(md, old2);
                     cx += pw + pad * 2;
                 }
@@ -2796,6 +2776,14 @@ fn text_size(dc: HDC, s: &str) -> (i32, i32) {
 fn pill_text(d: &crate::model::Device) -> String {
     match d.battery {
         Some(v) => format!("{v}%"),
+        None => "--".to_string(),
+    }
+}
+
+/// 任务栏条上的电量文本：**不带百分号**（弹出面板仍用 `pill_text`，保留 %）。
+fn bar_battery_text(d: &crate::model::Device) -> String {
+    match d.battery {
+        Some(v) => format!("{v}"),
         None => "--".to_string(),
     }
 }
