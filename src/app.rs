@@ -1547,8 +1547,10 @@ impl App {
                 let oldn = SelectObject(dc, HGDIOBJ(self.name_font().0));
                 let (tw, _) = text_size(dc, &d.name);
                 let _ = SelectObject(dc, oldn);
-                let oldp = SelectObject(dc, HGDIOBJ(self.pill_font().0));
-                let (pw, _) = text_size(dc, &pill_text(&d));
+                // 电量数字与设备名同字体同字号（原来是更小的 pill_font），
+                // 且宽度按 bar_battery_text（无 %）测量，与 paint 一致。
+                let oldp = SelectObject(dc, HGDIOBJ(self.name_font().0));
+                let (pw, _) = text_size(dc, &bar_battery_text(&d));
                 let _ = SelectObject(dc, oldp);
                 let item_w = if i == 0 { 0 } else { m.st(DEV_GAP) }
                     + tw
@@ -1658,16 +1660,16 @@ impl App {
                     let _ = SelectObject(md, old);
                     cx += tw + m.st(NAME_PILL_GAP);
 
-                    // 电量数字：只上色、不加底色。颜色沿用原胶囊的色阶
-                    // （绿/橙/红），但仍以文字形式表达，不丢低电量提示。
+                    // 电量数字：只上色、不加底色；与设备名同字体同字号。
+                    // 颜色用「亮色系」（原圆点那套），在任务栏上比胶囊底色更亮。
                     let pcolor = match d.battery {
-                        Some(v) if v <= low_alert => theme.pill_low,
+                        Some(v) if v <= low_alert => theme.dot_low,
                         Some(v) if v <= 50 => theme.pill_mid,
-                        Some(_) => theme.pill_ok,
+                        Some(_) => theme.dot_ok,
                         None => theme.pill_off_fg,
                     };
                     let ptext = bar_battery_text(&d);
-                    let old2 = SelectObject(md, HGDIOBJ(self.pill_font().0));
+                    let old2 = SelectObject(md, HGDIOBJ(self.name_font().0));
                     let (pw, ph) = text_size(md, &ptext);
                     let pad = m.st(PILL_PAD);
                     draw_text_halo(md, cx + pad, cy - ph / 2, &ptext, pcolor, theme.fg_outline);
