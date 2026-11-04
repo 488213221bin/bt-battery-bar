@@ -61,6 +61,55 @@ fn chronoish() -> String {
         .unwrap_or_default()
 }
 
+// ── 运行期标记：区分「正常退出 / panic / 被外部杀掉」──────────────────
+// 启动时写 running.lock，正常退出时删掉。下次启动若发现它还在，说明上一次
+// 是非正常结束（panic abort 或被 TerminateProcess），日志里留一条证据。
+
+fn marker_path() -> PathBuf {
+    path().with_file_name("running.lock")
+}
+
+/// 启动时调用：判断上次是否非正常结束，写标记，记录 pid。
+pub fn note_start() {
+    let m = marker_path();
+    match std::fs::read_to_string(&m) {
+        Ok(prev) => log(&format!(
+            "run: previous run ended WITHOUT clean exit ({})",
+            prev.trim()
+        )),
+        Err(_) => log("run: previous run ended cleanly (or first run)"),
+    }
+    let _ = std::fs::write(
+        &m,
+        format!("pid={} started={}", std::process::id(), chronoish()),
+    );
+    log(&format!("run: start pid={}", std::process::id()));
+}
+
+/// 正常退出时调用：**先写日志再删标记**，删失败也不至于丢信息。
+pub fn note_clean_exit(reason: &str) {
+    log(&format!("run: exit (clean, reason={reason})"));
+    let _ = std::fs::remove_file(marker_path());
+}
+
+/// 安装 panic hook。`panic = "abort"` 会让进程以 0xc0000409 静默终止，
+/// 没有这条记录就完全查不到崩溃原因（事故：2026-11-03 23:13）。
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "?".to_string());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "非字符串 panic 负载".to_string());
+        log(&format!("PANIC {msg} @ {loc}"));
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
