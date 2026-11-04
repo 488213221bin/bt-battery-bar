@@ -25,6 +25,9 @@ mod settings;
 mod theme;
 
 fn main() {
+    // 最先装 panic hook：panic="abort" 时机进程静默以 0xc0000409 退出，
+    // 没有这条就查不到崩溃原因。
+    dblog::install_panic_hook();
     let args: Vec<String> = std::env::args().skip(1).collect();
     attach_parent_console(&args);
 
