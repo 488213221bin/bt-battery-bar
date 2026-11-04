@@ -603,7 +603,7 @@ impl App {
     // ==================================================================
     pub fn run(self: &Arc<Self>) -> i32 {
         unsafe {
-            crate::dblog::log("run: start");
+            crate::dblog::note_start();
             // Per-monitor-v2：混合 DPI 多屏下 GetDpiForWindow 会给出**每块屏**的
             // DPI，配合 WM_DPICHANGED 重建字体。SYSTEM_AWARE 时全进程只有一个 DPI，
             // 条挂到 100% 屏的任务栏（48px）上时字会按 150% 画成 36px，明显挤爆。
@@ -741,6 +741,9 @@ impl App {
             }
             let _ = DeleteObject(HGDIOBJ(self.name_font().0));
             let _ = DeleteObject(HGDIOBJ(self.pill_font().0));
+            // 走到这里说明消息循环是正常结束的（托盘退出 / WM_QUIT），
+            // 记一条并清掉运行标记，下次启动就能区分「正常退出」和「崩了」。
+            crate::dblog::note_clean_exit("message loop exit");
             msg.wParam.0 as i32
         }
     }
@@ -1233,11 +1236,15 @@ impl App {
                 let _ = SetParent(hwnd, HWND::default());
                 self.embedded.store(false, Ordering::Relaxed);
             }
-            if !self.embed_into_taskbar(shell) && self.strip_should_show() {
-                // Degraded mode: make sure the floating bar is visible (only
-                // when the visibility policy says so — never for a user-
-                // hidden strip).
-                let _ = ShowWindow(hwnd, SW_SHOWNA);
+            if !self.embed_into_taskbar(shell) {
+                // 降级为浮动条：记一条，否则「条消失但进程还在」事后无从判断。
+                crate::dblog::log("taskbar: embed failed -> floating fallback");
+                if self.strip_should_show() {
+                    // Degraded mode: make sure the floating bar is visible (only
+                    // when the visibility policy says so — never for a user-
+                    // hidden strip).
+                    let _ = ShowWindow(hwnd, SW_SHOWNA);
+                }
             }
         }
     }
@@ -2125,6 +2132,7 @@ impl App {
                     crate::dblog::log("session ending -> remove tray icon");
                     self.shutting_down.store(true, Ordering::Release);
                     self.remove_tray_icon();
+                    crate::dblog::note_clean_exit("session ending");
                 }
                 LRESULT(0)
             }
