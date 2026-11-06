@@ -25,7 +25,14 @@ pub fn make_icon(battery: Option<u8>) -> windows::core::Result<HICON> {
         bmi.bmiHeader.biCompression = BI_RGB.0;
 
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-        let hbmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, HANDLE::default(), 0)?;
+        // 失败时必须先 ReleaseDC，否则每次失败都漏一个屏幕 DC（`?` 会跳过清理）。
+        let hbmp = match CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, HANDLE::default(), 0) {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = ReleaseDC(HWND::default(), dc);
+                return Err(e);
+            }
+        };
 
         let px = bits.cast::<u32>();
         let (fill_color, fill_h, show_level) = match battery {
@@ -87,7 +94,16 @@ pub fn make_icon(battery: Option<u8>) -> windows::core::Result<HICON> {
             hbmMask: hbm_mask,
             hbmColor: hbmp,
         };
-        let icon = CreateIconIndirect(&info)?;
+        // 失败路径要把已建的位图和 DC 一起释放掉（`?` 会漏）。
+        let icon = match CreateIconIndirect(&info) {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = DeleteObject(HGDIOBJ(hbmp.0));
+                let _ = DeleteObject(HGDIOBJ(hbm_mask.0));
+                let _ = ReleaseDC(HWND::default(), dc);
+                return Err(e);
+            }
+        };
 
         let _ = DeleteObject(HGDIOBJ(hbmp.0));
         let _ = DeleteObject(HGDIOBJ(hbm_mask.0));
