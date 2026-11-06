@@ -40,7 +40,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CheckMenuRadioItem, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowExW,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowExW,
     FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetAncestor, GetClassNameW,
     GetClientRect, GetCursorPos, GetForegroundWindow, GetMessageW, GetParent, GetWindowLongPtrW,
     GetWindowRect, HICON, HMENU, HWND_NOTOPMOST, IDC_ARROW, IsIconic, IsWindowVisible, KillTimer,
@@ -737,7 +737,8 @@ impl App {
             self.teardown_resources();
             self.remove_tray_icon();
             if let Some(h) = self.tray_hicon() {
-                let _ = DeleteObject(HGDIOBJ(h.0));
+                // 图标要用 DestroyIcon 释放（DeleteObject 对 HICON 无效）。
+                let _ = DestroyIcon(h);
             }
             let _ = DeleteObject(HGDIOBJ(self.name_font().0));
             let _ = DeleteObject(HGDIOBJ(self.pill_font().0));
@@ -766,8 +767,24 @@ impl App {
     }
 
     fn add_tray_icon(&self) {
-        let icon = icon::make_icon(None).unwrap();
-        *self.tray_icon.lock().unwrap() = icon.0 as i64;
+        // 同 update_tray：创建失败只记日志，不能让 panic 结束进程。
+        let icon = match icon::make_icon(None) {
+            Ok(i) => i,
+            Err(e) => {
+                crate::dblog::log(&format!("tray: add_tray_icon make_icon failed ({e})"));
+                return;
+            }
+        };
+        {
+            let mut slot = self.tray_icon.lock().unwrap();
+            // 覆盖前必须先释放旧图标（用 DestroyIcon，不是 DeleteObject）。
+            if *slot != 0 {
+                unsafe {
+                    let _ = DestroyIcon(HICON(*slot as *mut core::ffi::c_void));
+                }
+            }
+            *slot = icon.0 as i64;
+        }
         let nid = self.notify_data(icon, "蓝牙电量");
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &nid);
@@ -782,16 +799,32 @@ impl App {
             has_connected: devices.iter().any(|d| d.connected),
         };
         let worst = worst_battery(&snap);
-        let icon = icon::make_icon(worst).unwrap();
-        {
-            let mut slot = self.tray_icon.lock().unwrap();
-            if *slot != 0 {
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(*slot as *mut core::ffi::c_void));
+        // 图标创建可能失败（GDI/USER 句柄耗尽时 CreateDIBSection 会返回
+        // ERROR_NOT_ENOUGH_MEMORY）。这里**绝不能用 unwrap**：panic 会被
+        // panic="abort" 直接终止整个进程（事故 2026-11-06 13:15 app.rs:785）。
+        // 失败时沿用旧图标，只更新提示文字。
+        let icon = match icon::make_icon(worst) {
+            Ok(i) => {
+                let mut slot = self.tray_icon.lock().unwrap();
+                if *slot != 0 {
+                    // CreateIconIndirect 建的图标必须用 DestroyIcon 释放；
+                    // DeleteObject 对 HICON 无效 —— 这是历史句柄泄漏的根因。
+                    unsafe {
+                        let _ = DestroyIcon(HICON(*slot as *mut core::ffi::c_void));
+                    }
                 }
+                *slot = i.0 as i64;
+                i
             }
-            *slot = icon.0 as i64;
-        }
+            Err(e) => {
+                crate::dblog::log(&format!("tray: make_icon failed ({e}) -> keep old icon"));
+                let slot = *self.tray_icon.lock().unwrap();
+                if slot == 0 {
+                    return;
+                }
+                HICON(slot as *mut core::ffi::c_void)
+            }
+        };
         let tip = if snap.devices.is_empty() {
             "无设备".to_string()
         } else {
@@ -2214,7 +2247,7 @@ impl App {
                     let slot = *self.tray_icon.lock().unwrap();
                     if slot != 0 {
                         unsafe {
-                            let _ = DeleteObject(HGDIOBJ(slot as *mut core::ffi::c_void));
+                            let _ = DestroyIcon(HICON(slot as *mut core::ffi::c_void));
                         }
                     }
                     *self.tray_icon.lock().unwrap() = 0;
